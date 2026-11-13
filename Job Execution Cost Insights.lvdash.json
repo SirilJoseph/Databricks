@@ -1,0 +1,1754 @@
+{
+  "datasets": [
+    {
+      "name": "87629189",
+      "displayName": "Most Expensive Jobs (30 Days)",
+      "config": {
+        "source": "with list_cost_per_job as (\n  SELECT\n    t1.workspace_id,\n    t1.usage_metadata.job_id,\n    COUNT(DISTINCT t1.usage_metadata.job_run_id) as runs,\n    SUM(t1.usage_quantity * list_prices.pricing.default) as list_cost,\n    first(identity_metadata.run_as, true) as run_as,\n    first(t1.custom_tags, true) as custom_tags,\n    MAX(t1.usage_end_time) as last_seen_date\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices on\n    t1.cloud = list_prices.cloud and\n    t1.sku_name = list_prices.sku_name and\n    t1.usage_start_time >= list_prices.price_start_time and\n    (t1.usage_end_time <= list_prices.price_end_time or list_prices.price_end_time is null)\n  WHERE\n    (t1.billing_origin_product = 'JOBS' OR (t1.billing_origin_product = 'SQL' AND t1.usage_metadata.job_id IS NOT NULL))\n    AND (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n),\nmost_recent_jobs as (\n  SELECT\n    *,\n    ROW_NUMBER() OVER(PARTITION BY workspace_id, job_id ORDER BY change_time DESC) as rn\n  FROM\n    system.lakeflow.jobs QUALIFY rn=1\n)\nSELECT\n    t2.name,\n    t1.job_id,\n    t1.workspace_id,\n    t1.runs,\n    t1.run_as,\n    SUM(list_cost) as list_cost,\n    t1.last_seen_date\nFROM list_cost_per_job t1\n  LEFT JOIN most_recent_jobs t2 USING (workspace_id, job_id)\nGROUP BY ALL\nORDER BY list_cost DESC",
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Represents the total number of rows in the dataset. Use this measure to count all",
+            "displayName": "Count"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    },
+    {
+      "name": "81069a8f",
+      "displayName": "Most Expensive Job Runs (30 days)",
+      "config": {
+        "source": "with list_cost_per_run as (\n  SELECT\n    t1.workspace_id,\n    t1.usage_metadata.job_id,\n    t1.usage_metadata.job_run_id,\n    SUM(t1.usage_quantity * list_prices.pricing.default) as list_cost,\n    first(identity_metadata.run_as, true) as run_as,\n    MAX(t1.usage_end_time) as last_seen_date\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices on\n    t1.cloud = list_prices.cloud and\n    t1.sku_name = list_prices.sku_name and\n    t1.usage_start_time >= list_prices.price_start_time and\n    (t1.usage_end_time <= list_prices.price_end_time or list_prices.price_end_time is null)\n  WHERE\n    (t1.billing_origin_product = 'JOBS' OR (t1.billing_origin_product = 'SQL' AND t1.usage_metadata.job_id IS NOT NULL))\n    AND (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n),\nmost_recent_jobs as (\n  SELECT\n    *,\n    ROW_NUMBER() OVER(PARTITION BY workspace_id, job_id ORDER BY change_time DESC) as rn\n  FROM\n    system.lakeflow.jobs QUALIFY rn=1\n)\nSELECT\n    t2.name,\n    t1.job_id,\n    t1.job_run_id AS run_id,\n    t1.run_as,\n    SUM(list_cost) as list_cost,\n    t1.last_seen_date\nFROM list_cost_per_run t1\n  LEFT JOIN most_recent_jobs t2 USING (workspace_id, job_id)\nGROUP BY ALL\nORDER BY list_cost DESC",
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Represents the total number of rows in the dataset. Use this measure to count all",
+            "displayName": "Count"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    },
+    {
+      "name": "job_cost_components",
+      "displayName": "Job Cost by Component (30 Days)",
+      "config": {
+        "source": "with job_usage as (\n  SELECT\n    t1.workspace_id,\n    t1.usage_metadata.job_id,\n    t1.usage_date,\n    t1.sku_name,\n    SUM(t1.usage_quantity) AS total_usage,\n    SUM(t1.usage_quantity * list_prices.pricing.default) AS total_cost\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices on\n    t1.cloud = list_prices.cloud and\n    t1.sku_name = list_prices.sku_name and\n    t1.usage_start_time >= list_prices.price_start_time and\n    (t1.usage_end_time <= list_prices.price_end_time or list_prices.price_end_time is null)\n  WHERE\n    (t1.billing_origin_product = 'JOBS' OR (t1.billing_origin_product = 'SQL' AND t1.usage_metadata.job_id IS NOT NULL))\n    AND (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n) SELECT\n  t1.job_id,\n  t1.usage_date,\n  t1.sku_name,\n  t1.total_usage,\n  t1.total_cost\nFROM job_usage t1",
+        "measures": [
+          {
+            "name": "list_cost",
+            "expr": "SUM(total_cost)"
+          },
+          {
+            "name": "usage_quantity",
+            "expr": "SUM(total_usage)"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "name": "job_id",
+            "expr": "job_id"
+          },
+          {
+            "name": "usage_date",
+            "expr": "usage_date"
+          },
+          {
+            "name": "sku_name",
+            "expr": "sku_name"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    },
+    {
+      "name": "top_job_cost_components",
+      "displayName": "Top 10 Job Cost Components (30 Days)",
+      "config": {
+        "source": "with job_usage as (\n  SELECT\n    t1.usage_date,\n    t1.sku_name,\n    SUM(t1.usage_quantity) AS total_usage,\n    SUM(t1.usage_quantity * list_prices.pricing.default) AS total_cost\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices on\n    t1.cloud = list_prices.cloud and\n    t1.sku_name = list_prices.sku_name and\n    t1.usage_start_time >= list_prices.price_start_time and\n    (t1.usage_end_time <= list_prices.price_end_time or list_prices.price_end_time is null)\n  WHERE\n    (t1.billing_origin_product = 'JOBS' OR (t1.billing_origin_product = 'SQL' AND t1.usage_metadata.job_id IS NOT NULL))\n    AND (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n) SELECT\n  t1.sku_name,\n  t1.total_usage,\n  t1.total_cost\nFROM job_usage t1 ORDER BY t1.total_cost DESC LIMIT 10",
+        "measures": [
+          {
+            "name": "list_cost",
+            "expr": "SUM(total_cost)"
+          },
+          {
+            "name": "usage_quantity",
+            "expr": "SUM(total_usage)"
+          },
+          {
+            "name": "dbu_rate",
+            "expr": "SUM(total_cost) / NULLIF(SUM(total_usage), 0)"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "name": "sku_name",
+            "expr": "sku_name"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    },
+    {
+      "name": "job_cost_by_resource",
+      "displayName": "Job Cost by Resource (30 Days)",
+      "config": {
+        "source": "with job_usage as (\n  SELECT\n    t1.workspace_id,\n    t1.usage_date,\n    t1.usage_metadata.job_id AS job_id,\n    t1.sku_name AS sku_name,\n    SUM(t1.usage_quantity) AS total_usage,\n    SUM(t1.usage_quantity * list_prices.pricing.default) AS total_cost\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices ON\n    t1.cloud = list_prices.cloud AND\n    t1.sku_name = list_prices.sku_name AND\n    t1.usage_start_time >= list_prices.price_start_time AND\n    (t1.usage_end_time <= list_prices.price_end_time OR list_prices.price_end_time IS NULL)\n  WHERE\n    (t1.billing_origin_product = 'JOBS' OR (t1.billing_origin_product = 'SQL' AND t1.usage_metadata.job_id IS NOT NULL))\n    AND (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n),\nmost_recent_jobs as (\n  SELECT\n    *,\n    ROW_NUMBER() OVER(PARTITION BY workspace_id, job_id ORDER BY change_time DESC) as rn\n  FROM system.lakeflow.jobs QUALIFY rn=1\n)\nSELECT\n  t1.job_id,\n  t2.name,\n  t1.usage_date,\n  t1.sku_name,\n  t1.total_usage,\n  t1.total_cost\nFROM job_usage t1\nLEFT JOIN most_recent_jobs t2 USING (workspace_id, job_id)",
+        "measures": [
+          {
+            "name": "list_cost",
+            "expr": "SUM(total_cost)"
+          },
+          {
+            "name": "usage_quantity",
+            "expr": "SUM(total_usage)"
+          },
+          {
+            "name": "dbu_rate",
+            "expr": "SUM(total_cost) / NULLIF(SUM(total_usage), 0)"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "name": "job_id",
+            "expr": "job_id"
+          },
+          {
+            "name": "name",
+            "expr": "name"
+          },
+          {
+            "name": "usage_date",
+            "expr": "usage_date"
+          },
+          {
+            "name": "sku_name",
+            "expr": "sku_name"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    },
+    {
+      "name": "workspace_cost_by_product",
+      "displayName": "Workspace Cost by Product & SKU",
+      "config": {
+        "source": "with product_usage as (\n  SELECT\n    t1.usage_date,\n    t1.billing_origin_product,\n    t1.sku_name,\n    SUM(t1.usage_quantity) AS total_usage,\n    SUM(t1.usage_quantity * list_prices.pricing.default) AS total_cost\n  FROM system.billing.usage t1\n  INNER JOIN system.billing.list_prices list_prices on\n    t1.cloud = list_prices.cloud and\n    t1.sku_name = list_prices.sku_name and\n    t1.usage_start_time >= list_prices.price_start_time and\n    (t1.usage_end_time <= list_prices.price_end_time or list_prices.price_end_time is null)\n  WHERE\n    (date_range.min IS NULL OR t1.usage_date >= date_range.min)\n    AND (date_range.max IS NULL OR t1.usage_date <= date_range.max)\n  GROUP BY ALL\n) SELECT\n  t1.usage_date,\n  t1.billing_origin_product,\n  t1.sku_name,\n  t1.total_usage,\n  t1.total_cost\nFROM product_usage t1",
+        "measures": [
+          {
+            "name": "list_cost",
+            "expr": "SUM(total_cost)"
+          },
+          {
+            "name": "usage_quantity",
+            "expr": "SUM(total_usage)"
+          },
+          {
+            "name": "products",
+            "expr": "COUNT(DISTINCT billing_origin_product)"
+          },
+          {
+            "name": "skus",
+            "expr": "COUNT(DISTINCT sku_name)"
+          },
+          {
+            "name": "dbu_rate",
+            "expr": "SUM(total_cost) / NULLIF(SUM(total_usage), 0)"
+          }
+        ],
+        "version": "1.1",
+        "dimensions": [
+          {
+            "name": "usage_date",
+            "expr": "usage_date"
+          },
+          {
+            "name": "billing_origin_product",
+            "expr": "billing_origin_product"
+          },
+          {
+            "name": "sku_name",
+            "expr": "sku_name"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date_range",
+            "dataType": "STRUCT<min DATE, max DATE>",
+            "default": "named_struct('min', current_date() - INTERVAL 30 DAY, 'max', current_date())"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "name": "c5be37a8",
+      "displayName": "Dashboard",
+      "layout": [
+        {
+          "widget": {
+            "name": "total_job_cost",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_components",
+                  "fields": [
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Total Job Cost",
+                  "fields": []
+                },
+                "description": "Total list-price cost of job compute plus job-run SQL warehouse usage in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(list_cost)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "total_compute_usage",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_components",
+                  "fields": [
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Total Compute Usage (DBUs)",
+                  "fields": []
+                },
+                "description": "Total DBUs consumed by job compute and job-run SQL warehouses in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(usage_quantity)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "jobs_executed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "87629189",
+                  "fields": [
+                    {
+                      "name": "measure(count)",
+                      "expression": "MEASURE(`count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Jobs with Usage",
+                "description": "Number of distinct jobs that incurred compute usage in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(count)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "job_runs_executed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "87629189",
+                  "fields": [
+                    {
+                      "name": "sum(runs)",
+                      "expression": "SUM(`runs`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Job Runs Executed",
+                "description": "Total job runs that consumed compute in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(runs)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "daily_cost_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_components",
+                  "fields": [
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Daily Job Cost Trend",
+                "description": "Total job compute cost per day over the selected date range."
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "displayName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "cost_by_component_top10",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "top_job_cost_components",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Cost by Resource (Top 10)",
+                  "fields": []
+                },
+                "description": "Top 10 billing resources (SKUs) by cost — job compute types and SQL warehouses used by jobs."
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sku_name",
+                  "displayName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "sku_name",
+                  "displayName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "component_detail_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "top_job_cost_components",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    },
+                    {
+                      "name": "measure(dbu_rate)",
+                      "expression": "MEASURE(`dbu_rate`)"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Resource Usage &amp; Cost Detail",
+                  "fields": []
+                },
+                "description": "DBUs, effective $/DBU rate, and list cost per billing resource (SKU) for jobs in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "sku_name"
+                  },
+                  {
+                    "fieldName": "measure(usage_quantity)"
+                  },
+                  {
+                    "fieldName": "measure(dbu_rate)"
+                  },
+                  {
+                    "fieldName": "measure(list_cost)"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 11,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "most_expensive_jobs_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "87629189",
+                  "fields": [
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "`runs`"
+                    },
+                    {
+                      "name": "run_as",
+                      "expression": "`run_as`"
+                    },
+                    {
+                      "name": "sum(list_cost)",
+                      "expression": "SUM(`list_cost`)"
+                    },
+                    {
+                      "name": "last_seen_date",
+                      "expression": "`last_seen_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Most Expensive Jobs",
+                  "fields": []
+                },
+                "description": "Jobs ranked by total cost, including SQL warehouse usage from their runs. Click a job's name to see its resource breakdown below."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "name"
+                  },
+                  {
+                    "fieldName": "job_id"
+                  },
+                  {
+                    "fieldName": "runs"
+                  },
+                  {
+                    "fieldName": "run_as"
+                  },
+                  {
+                    "fieldName": "sum(list_cost)"
+                  },
+                  {
+                    "fieldName": "last_seen_date"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "most_expensive_runs_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "81069a8f",
+                  "fields": [
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "run_id",
+                      "expression": "`run_id`"
+                    },
+                    {
+                      "name": "run_as",
+                      "expression": "`run_as`"
+                    },
+                    {
+                      "name": "sum(list_cost)",
+                      "expression": "SUM(`list_cost`)"
+                    },
+                    {
+                      "name": "last_seen_date",
+                      "expression": "`last_seen_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Most Expensive Job Runs",
+                "description": "Individual job runs ranked by cost — which run of which job was most expensive in the selected range."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "name"
+                  },
+                  {
+                    "fieldName": "job_id"
+                  },
+                  {
+                    "fieldName": "run_id"
+                  },
+                  {
+                    "fieldName": "run_as"
+                  },
+                  {
+                    "fieldName": "sum(list_cost)"
+                  },
+                  {
+                    "fieldName": "last_seen_date"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 45,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "selected_job_summary_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_by_resource",
+                  "fields": [
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    },
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Selected Job — Cost & Usage Summary",
+                "description": "Total cost and DBUs per job. Shows all jobs until you click one in the table above, then focuses on that job."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "name"
+                  },
+                  {
+                    "fieldName": "job_id"
+                  },
+                  {
+                    "fieldName": "measure(list_cost)"
+                  },
+                  {
+                    "fieldName": "measure(usage_quantity)"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 27,
+            "width": 5,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "selected_job_cost_by_resource",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_by_resource",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": "Cost by Job & Resource",
+                "description": "Cost per job split by billing resource (SKU). After clicking a job above, shows only that job's resources."
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "name",
+                  "displayName": "name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "sku_name",
+                  "displayName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 27,
+            "width": 7,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "selected_job_resource_detail_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_by_resource",
+                  "fields": [
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    },
+                    {
+                      "name": "measure(dbu_rate)",
+                      "expression": "MEASURE(`dbu_rate`)"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "showDescription": true,
+                "title": {
+                  "value": "Selected Job — Resource Usage &amp; Cost",
+                  "fields": []
+                },
+                "description": "DBUs, $/DBU rate, and cost by billing resource (SKU) for the selected job."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "name"
+                  },
+                  {
+                    "fieldName": "job_id"
+                  },
+                  {
+                    "fieldName": "sku_name"
+                  },
+                  {
+                    "fieldName": "measure(usage_quantity)"
+                  },
+                  {
+                    "fieldName": "measure(dbu_rate)"
+                  },
+                  {
+                    "fieldName": "measure(list_cost)"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 32,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "selected_job_daily_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "job_cost_by_resource",
+                  "fields": [
+                    {
+                      "name": "name",
+                      "expression": "`name`"
+                    },
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Selected Job — Daily Cost Trend",
+                "description": "Daily cost of each job. Click a job's name above to focus this chart on that job."
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "displayName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "name",
+                  "displayName": "name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 39,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "workspace_spend_header",
+            "spec": {
+              "version": 1,
+              "widgetType": "text",
+              "encodings": {
+                "text": {
+                  "fields": [],
+                  "lines": [
+                    "## Workspace Spend Overview — All Products",
+                    "Where total workspace spend goes across every billing product — jobs, SQL warehouses, all-purpose compute, pipelines, and more — for the selected date range."
+                  ]
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 54,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_total_spend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Total Workspace Spend",
+                "description": "Total list-price spend across all billable products in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(list_cost)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 56,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_total_dbus",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Total Workspace DBUs",
+                "description": "Total DBUs consumed across all billable products in the selected date range."
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(usage_quantity)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 56,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_products",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "measure(products)",
+                      "expression": "MEASURE(`products`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": {
+                  "value": "Products with Spend",
+                  "fields": []
+                },
+                "description": {
+                  "value": "Number of distinct billing products (jobs, SQL, all-purpose compute, …) with usage in the range.",
+                  "fields": []
+                }
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(products)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 56,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_skus",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "measure(skus)",
+                      "expression": "MEASURE(`skus`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": {
+                  "value": "SKUs with Spend",
+                  "fields": []
+                },
+                "description": {
+                  "value": "Number of distinct billing SKUs (resource types) with usage in the range.",
+                  "fields": []
+                }
+              },
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(skus)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 56,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_daily_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "billing_origin_product",
+                      "expression": "`billing_origin_product`"
+                    },
+                    {
+                      "name": "usage_date",
+                      "expression": "`usage_date`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Daily Spend by Product",
+                "description": "Daily total spend split by billing product — when and on what the workspace spends."
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_date",
+                  "displayName": "usage_date",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "billing_origin_product",
+                  "displayName": "billing_origin_product",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 60,
+            "width": 8,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_spend_pie",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    },
+                    {
+                      "name": "billing_origin_product",
+                      "expression": "`billing_origin_product`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Spend Share by Product",
+                "description": "Share of total workspace spend by billing product."
+              },
+              "version": 3,
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "measure(list_cost)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "list_cost"
+                },
+                "color": {
+                  "fieldName": "billing_origin_product",
+                  "displayName": "billing_origin_product",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 60,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_top_skus",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": "Top SKUs by Cost (All Products)",
+                "description": "The most expensive billing SKUs workspace-wide, regardless of product (top 10 shown; scroll for more)."
+              },
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sku_name",
+                  "displayName": "sku_name",
+                  "scale": {
+                    "categorySize": {
+                      "number": 10,
+                      "type": "number-of-categories"
+                    },
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(list_cost)",
+                  "displayName": "list_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "sku_name",
+                  "displayName": "sku_name",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 67,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "ws_detail_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "fields": [
+                    {
+                      "name": "billing_origin_product",
+                      "expression": "`billing_origin_product`"
+                    },
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "measure(usage_quantity)",
+                      "expression": "MEASURE(`usage_quantity`)"
+                    },
+                    {
+                      "name": "measure(dbu_rate)",
+                      "expression": "MEASURE(`dbu_rate`)"
+                    },
+                    {
+                      "name": "measure(list_cost)",
+                      "expression": "MEASURE(`list_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showDescription": true,
+                "showTitle": true,
+                "title": {
+                  "value": "Workspace Spend Detail",
+                  "fields": []
+                },
+                "description": "DBUs, effective $/DBU rate, and list cost per billing product and SKU for the whole workspace."
+              },
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "billing_origin_product"
+                  },
+                  {
+                    "fieldName": "sku_name"
+                  },
+                  {
+                    "fieldName": "measure(usage_quantity)"
+                  },
+                  {
+                    "fieldName": "measure(dbu_rate)"
+                  },
+                  {
+                    "fieldName": "measure(list_cost)"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 67,
+            "width": 6,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "global_filters",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "date_range_filter",
+            "queries": [
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec38d7e15b293d6ea5ca9e7507e_date_range",
+                "query": {
+                  "datasetName": "job_cost_components",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec2fe99171cae64e0a407676528_date_range",
+                "query": {
+                  "datasetName": "87629189",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec32f84197881682cb656617702_date_range",
+                "query": {
+                  "datasetName": "81069a8f",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec38e151812bf021da57591188a_date_range",
+                "query": {
+                  "datasetName": "top_job_cost_components",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1defa7bff1d72b2dfb88ff1756c60_date_range",
+                "query": {
+                  "datasetName": "job_cost_by_resource",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1defdc47e1daba4739887d8ac40ea_date_range",
+                "query": {
+                  "datasetName": "workspace_cost_by_product",
+                  "parameters": [
+                    {
+                      "name": "date_range",
+                      "keyword": "date_range"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "fields": [],
+                  "value": "Date Range"
+                }
+              },
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec38d7e15b293d6ea5ca9e7507e_date_range"
+                  },
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec2fe99171cae64e0a407676528_date_range"
+                  },
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec32f84197881682cb656617702_date_range"
+                  },
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1dec38e151812bf021da57591188a_date_range"
+                  },
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1defa7bff1d72b2dfb88ff1756c60_date_range"
+                  },
+                  {
+                    "parameterName": "date_range",
+                    "queryName": "parameter_dashboards/01f1debbd9831db59f1c67c3e1c1b7dd/datasets/01f1defdc47e1daba4739887d8ac40ea_date_range"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#EBEBEB",
+        "dark": "#10161C"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FCFCFD",
+        "dark": "#1F272D"
+      },
+      "widgetBorderColor": {
+        "light": "#FCFCFD",
+        "dark": "#1F272D"
+      },
+      "selectionColor": {
+        "light": "#2272B4"
+      },
+      "visualizationColors": [
+        "#15AFDD",
+        "#2375A8",
+        "#52A870",
+        "#C85070",
+        "#C89930"
+      ],
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED",
+      "widgetCornerRadius": 8,
+      "widgetShadow": 10,
+      "fontSettings": {
+        "base": {
+          "fontFamily": "Inter",
+          "fontColor": {
+            "light": "#08141A",
+            "dark": "#EBEBEB"
+          }
+        }
+      }
+    },
+    "applyModeEnabled": false
+  }
+}
